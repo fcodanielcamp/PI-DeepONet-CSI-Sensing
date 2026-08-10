@@ -1,0 +1,53 @@
+=== REPORTE DETALLADO DE DIAGNÓSTICO (TRAIN / VAL / TEST) ===
+
+=========================================
+ SPLIT: TRAIN
+=========================================
+              precision    recall  f1-score   support
+
+  Baja (0-2)     0.9394    0.9130    0.9260    360055
+ Media (3-5)     0.7798    0.8184    0.7987    195538
+  Alta (6-8)     0.7286    0.7343    0.7314     56523
+
+    accuracy                         0.8663    612116
+   macro avg     0.8159    0.8219    0.8187    612116
+weighted avg     0.8690    0.8663    0.8674    612116
+--- MÉTRICAS CONSENSUS (Train) ---
+macro_f1 = 0.8187
+balanced_acc = 0.8219
+pred_counts = [349934 205216  56966]
+
+=========================================
+ SPLIT: VAL
+=========================================
+              precision    recall  f1-score   support
+
+  Baja (0-2)     0.9295    0.7931    0.8559    108878
+ Media (3-5)     0.5831    0.7492    0.6558     45691
+  Alta (6-8)     0.4166    0.6314    0.5019      5732
+
+    accuracy                         0.7748    160301
+   macro avg     0.6430    0.7246    0.6712    160301
+weighted avg     0.8124    0.7748    0.7862    160301
+--- MÉTRICAS CONSENSUS (Val) ---
+macro_f1 = 0.6712
+balanced_acc = 0.7246
+pred_counts = [92907 58706  8688]
+
+=========================================
+ SPLIT: TEST
+=========================================
+              precision    recall  f1-score   support
+
+  Baja (0-2)     0.0000    0.0000    0.0000    110476
+ Media (3-5)     0.3088    0.9998    0.4718     72265
+  Alta (6-8)     0.4839    0.0003    0.0006     51296
+
+    accuracy                         0.3088    234037
+   macro avg     0.2642    0.3334    0.1575    234037
+weighted avg     0.2014    0.3088    0.1458    234037
+--- MÉTRICAS CONSENSUS (Test) ---
+macro_f1 = 0.1575
+balanced_acc = 0.3334
+pred_counts = [     0 234006     31]
+

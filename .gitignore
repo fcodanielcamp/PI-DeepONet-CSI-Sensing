@@ -1,0 +1,19 @@
+# Exclusión estricta de binarios y datos pesados (NUNCA SUBIR)
+data/
+models/
+runs/
+
+# Tipos de archivo binario o pesado
+*.pth
+*.dat
+*.npz
+*.bin
+*.onnx
+
+# Cache de Python y entornos virtuales
+__pycache__/
+*.py[cod]
+.venv/
+env/
+.ipynb_checkpoints/
+.env
