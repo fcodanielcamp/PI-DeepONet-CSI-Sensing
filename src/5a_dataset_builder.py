@@ -1,5 +1,5 @@
 import os
-import gc
+import glob
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -9,10 +9,9 @@ from sklearn.model_selection import train_test_split
 # ==============================================================================
 # CONFIGURACIÓN DE RUTAS DINÁMICAS (PORTABLE SERVIDOR)
 # ==============================================================================
-SRC_DIR = Path(__file__).resolve().parent          # .../project/src
-PROJECT_DIR = SRC_DIR.parent                       # .../project
+SRC_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SRC_DIR.parent
 DATA_DIR = PROJECT_DIR / "data"
-
 INPUT_CALIBRATED_DIR = DATA_DIR / "preprocessed" / "phase_calibrated"
 OUTPUT_TENSORS_DIR = DATA_DIR / "processed_tensors"
 SUMMARY_EXCEL = INPUT_CALIBRATED_DIR / "Summary_Filtrado.xlsx"
@@ -20,7 +19,6 @@ SUMMARY_EXCEL = INPUT_CALIBRATED_DIR / "Summary_Filtrado.xlsx"
 # Parámetros base
 WINDOW_SIZE = 25
 STRIDE = 12
-TARGET_RX = 1
 TARGET_BW = 80
 TARGET_CAMPAIGN = "MC1"
 EXPECTED_SUBCARRIERS = 241
@@ -52,24 +50,22 @@ def process_file_group_memmap(file_list, input_dir, split_name, output_dir):
     set_ids = []
     env_ids = []
     date_ids = []
-    
     global_frame_offset = 0
 
-    # 1. Pasada de inspección y conteo de tramas válidas
+    # 1. Pasada de inspección y conteo de tramas válidas (Acepta TODOS los receptores Rx)
     for file_name in file_list:
         mat_path = input_dir / file_name
         if not mat_path.exists():
             continue
-
         mat_data = scipy_io.loadmat(mat_path)
-        rx_val = get_scalar_safe(mat_data, 'Rx', 1)
         bw_val = get_scalar_safe(mat_data, 'BW', 80)
         app_val = get_str_safe(mat_data, 'Application', 'E')
         set_val = get_str_safe(mat_data, 'Set', "")
         env_val = get_str_safe(mat_data, 'Environment', "")
         date_val = get_str_safe(mat_data, 'Date', "")
 
-        if rx_val != TARGET_RX or bw_val != TARGET_BW:
+        # 🚀 Aceptamos cualquier Rx siempre que cumpla con el ancho de banda y la campaña
+        if bw_val != TARGET_BW:
             continue
         if app_val not in ['E', 'PC'] or not set_val.startswith(TARGET_CAMPAIGN):
             continue
@@ -100,7 +96,6 @@ def process_file_group_memmap(file_list, input_dir, split_name, output_dir):
         global_frame_offset += n_frames
 
     total_frames = global_frame_offset
-
     if len(valid_files) == 0:
         return None, None, None, None, None, None, None, None, None, 0
 
@@ -145,15 +140,14 @@ def process_file_group_memmap(file_list, input_dir, split_name, output_dir):
     )
 
 def build_dataset():
-    print("=== MÓDULO 5A: DATASET CROSS-DOMAIN CON ESTRATIFICACIÓN DE VALIDADOR ===")
-
+    print("=== MÓDULO 5A: DATASET MULTI-RX CROSS-DOMAIN (TODAS LAS ANTENAS) ===")
     if not SUMMARY_EXCEL.exists():
         raise FileNotFoundError(f"No se encontró el resumen de metadatos en {SUMMARY_EXCEL}.")
 
     df_summary = pd.read_excel(SUMMARY_EXCEL)
     OUTPUT_TENSORS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. Filtrar candidatos iniciales
+    # 1. 🚀 Incluir archivos de TODOS los receptores Rx
     df_filtered = df_summary[
         (df_summary['BW'] == TARGET_BW) &
         (df_summary['Application'].isin(['E', 'PC'])) &
@@ -170,40 +164,47 @@ def build_dataset():
 
     # Asignar etiqueta de personas para la estratificación
     people_col = 'N_People' if 'N_People' in source_df.columns else ('N_people' if 'N_people' in source_df.columns else None)
-    
     if people_col:
         source_df['file_label'] = source_df.apply(
             lambda r: 0 if str(r['Application']).strip() == 'E' else int(r[people_col]), axis=1
         )
     else:
-        source_df['file_label'] = source_df['Application'].apply(lambda x: 0 if str(x).strip() == 'E' else 1)
+        source_df['file_label'] = source_df['Application'].apply(
+            lambda x: 0 if str(x).strip() == 'E' else 1
+        )
 
-    # Divisíón ESTRATIFICADA por número de personas dentro del Dominio Fuente (80% Train / 20% Val)
+    # Garantizar alineación indexada exacta entre archivos y etiquetas
+    file_df = source_df.groupby('File', as_index=False)['file_label'].first()
+
+    # División ESTRATIFICADA por número de personas (80% Train / 20% Val)
     train_files, val_files = train_test_split(
-        source_df['File'].unique(),
+        file_df['File'].values,
         test_size=0.20,
         random_state=42,
-        stratify=source_df.groupby('File')['file_label'].first().values
+        stratify=file_df['file_label'].values
     )
 
     test_files = test_df['File'].unique()
 
-    print(f"\nPartición Cross-Domain Estratificada Asignada:")
-    print(f" - Dominios de Train: {source_df['Set'].unique()} ({len(train_files)} archivos)")
-    print(f" - Dominios de Val: {source_df['Set'].unique()} ({len(val_files)} archivos)")
-    print(f" - Dominios de Test (Target No Visto): {test_df['Set'].unique()} ({len(test_files)} archivos)")
+    print(f"\nPartición Multi-Rx Cross-Domain Asignada:")
+    print(f"  Dominios de Train: {source_df['Set'].unique()} ({len(train_files)} archivos)")
+    print(f"  Dominios de Val: {source_df['Set'].unique()} ({len(val_files)} archivos)")
+    print(f"  Dominios de Test (Target No Visto): {test_df['Set'].unique()} ({len(test_files)} archivos)")
 
     # 3. Procesar aisladamente cada grupo en disco
-    print("\nProcesando conjunto TRAIN (Source Domain)...")
-    tr_path, tr_shape, tr_starts, tr_people, tr_empty, tr_ids, tr_sets, tr_envs, tr_dates, n_tr_files = \
+    print("\nProcesando conjunto TRAIN (Multi-Rx)...")
+    tr_path, tr_shape, tr_starts, tr_people, tr_empty, \
+    tr_ids, tr_sets, tr_envs, tr_dates, n_tr_files = \
         process_file_group_memmap(train_files, INPUT_CALIBRATED_DIR, "train", OUTPUT_TENSORS_DIR)
 
-    print("Procesando conjunto VAL (Source Domain)...")
-    va_path, va_shape, va_starts, va_people, va_empty, va_ids, va_sets, va_envs, va_dates, n_va_files = \
+    print("Procesando conjunto VAL (Multi-Rx)...")
+    va_path, va_shape, va_starts, va_people, va_empty, \
+    va_ids, va_sets, va_envs, va_dates, n_va_files = \
         process_file_group_memmap(val_files, INPUT_CALIBRATED_DIR, "val", OUTPUT_TENSORS_DIR)
 
-    print("Procesando conjunto TEST (Target Domain No Visto)...")
-    te_path, te_shape, te_starts, te_people, te_empty, te_ids, te_sets, te_envs, te_dates, n_te_files = \
+    print("Procesando conjunto TEST (Multi-Rx Target No Visto)...")
+    te_path, te_shape, te_starts, te_people, te_empty, \
+    te_ids, te_sets, te_envs, te_dates, n_te_files = \
         process_file_group_memmap(test_files, INPUT_CALIBRATED_DIR, "test", OUTPUT_TENSORS_DIR)
 
     # 4. Normalización Z-score calculada EXCLUSIVAMENTE sobre TRAIN
@@ -217,8 +218,8 @@ def build_dataset():
     std_phase = float(np.std(sample_data[:, :, 1])) + 1e-8
 
     print(f"\nEstadísticas Z-Score obtenidas estrictamente del conjunto TRAIN:")
-    print(f" - Amplitud: Mean = {mean_amp:.4f}, Std = {std_amp:.4f}")
-    print(f" - Fase: Mean = {mean_phase:.4f}, Std = {std_phase:.4f}")
+    print(f"  Amplitud: Mean = {mean_amp:.4f}, Std = {std_amp:.4f}")
+    print(f"  Fase: Mean = {mean_phase:.4f}, Std = {std_phase:.4f}")
 
     # 5. Normalizar archivos en disco por bloques
     print("\nAplicando estandarización Z-score en disco por bloques...")
@@ -244,20 +245,26 @@ def build_dataset():
     save_meta_path = OUTPUT_TENSORS_DIR / "dataset_mc1_rx1_80mhz_meta.npz"
     np.savez_compressed(
         save_meta_path,
-        tr_shape=tr_shape, train_starts=tr_starts, train_y_people=tr_people, train_y_empty=tr_empty,
-        train_file_ids=tr_ids, train_set_ids=tr_sets, train_env_ids=tr_envs, train_date_ids=tr_dates,
-        va_shape=va_shape, val_starts=va_starts, val_y_people=va_people, val_y_empty=va_empty,
-        val_file_ids=va_ids, val_set_ids=va_sets, val_env_ids=va_envs, val_date_ids=va_dates,
-        te_shape=te_shape, test_starts=te_starts, test_y_people=te_people, test_y_empty=te_empty,
-        test_file_ids=te_ids, test_set_ids=te_sets, test_env_ids=te_envs, test_date_ids=te_dates,
+        tr_shape=tr_shape, train_starts=tr_starts,
+        train_y_people=tr_people, train_y_empty=tr_empty,
+        train_file_ids=tr_ids, train_set_ids=tr_sets,
+        train_env_ids=tr_envs, train_date_ids=tr_dates,
+        va_shape=va_shape, val_starts=va_starts,
+        val_y_people=va_people, val_y_empty=va_empty,
+        val_file_ids=va_ids, val_set_ids=va_sets,
+        val_env_ids=va_envs, val_date_ids=va_dates,
+        te_shape=te_shape, test_starts=te_starts,
+        test_y_people=te_people, test_y_empty=te_empty,
+        test_file_ids=te_ids, test_set_ids=te_sets,
+        test_env_ids=te_envs, test_date_ids=te_dates,
         stats=np.array([mean_amp, std_amp, mean_phase, std_phase], dtype=np.float32)
     )
 
-    print(f"\nResumen de Ventanas Generadas:")
-    print(f" - Train: {len(tr_starts)} ventanas ({n_tr_files} archivos)")
-    print(f" - Val:   {len(va_starts)} ventanas ({n_va_files} archivos)")
-    print(f" - Test:  {len(te_starts)} ventanas ({n_te_files} archivos - Dominio Target No Visto)")
-    print(f"\n¡Dataset reconstruido exitosamente en: '{save_meta_path}'!")
+    print(f"\nResumen de Ventanas Multi-Rx Generadas:")
+    print(f"  - Train: {len(tr_starts)} ventanas ({n_tr_files} archivos)")
+    print(f"  - Val: {len(va_starts)} ventanas ({n_va_files} archivos)")
+    print(f"  - Test: {len(te_starts)} ventanas ({n_te_files} archivos Dominio Target No Visto)")
+    print(f"\n¡Dataset Multi-Rx reconstruido exitosamente en: '{save_meta_path}'!")
 
 if __name__ == "__main__":
     build_dataset()
