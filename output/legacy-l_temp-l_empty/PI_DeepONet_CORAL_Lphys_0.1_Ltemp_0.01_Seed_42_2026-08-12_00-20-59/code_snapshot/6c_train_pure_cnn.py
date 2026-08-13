@@ -1,0 +1,174 @@
+import os
+import time
+import random
+import argparse
+from pathlib import Path
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from sklearn.utils.class_weight import compute_class_weight
+
+# Módulos del proyecto
+from m5b_pideeponet_model import MemmapCSIDataset
+from m6_cnn_baseline_model import PureCNN2DBaseline
+from experiment_logger import ExperimentLogger
+from evaluate_diagnostics import run_post_hoc_diagnostics
+
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_DIR / "data"
+TENSORS_DIR = DATA_DIR / "processed_tensors"
+META_PATH = TENSORS_DIR / "dataset_mc1_rx1_80mhz_meta.npz"
+CHECKPOINT_DIR = PROJECT_DIR / "models"
+CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+
+BATCH_SIZE = 256
+NUM_WORKERS = 4
+EPOCHS = 15
+LEARNING_RATE = 1e-3
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+def train_epoch(model, dataloader, optimizer, criterion, device):
+    model.train()
+    running_loss, correct, total = 0.0, 0, 0
+
+    for x_b, y_people, _ in dataloader:
+        x_b, y_people = x_b.to(device), y_people.to(device)
+
+        optimizer.zero_grad()
+        logits = model(x_b)
+        loss = criterion(logits, y_people)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item() * x_b.size(0)
+        preds = torch.argmax(logits, dim=1)
+        correct += (preds == y_people).sum().item()
+        total += y_people.size(0)
+
+    return running_loss / total, (correct / total) * 100.0
+
+def evaluate(model, dataloader, criterion, device):
+    model.eval()
+    running_loss, correct, total = 0.0, 0, 0
+
+    with torch.no_grad():
+        for x_b, y_people, _ in dataloader:
+            x_b, y_people = x_b.to(device), y_people.to(device)
+
+            logits = model(x_b)
+            loss = criterion(logits, y_people)
+
+            running_loss += loss.item() * x_b.size(0)
+            preds = torch.argmax(logits, dim=1)
+            correct += (preds == y_people).sum().item()
+            total += y_people.size(0)
+
+    return running_loss / total, (correct / total) * 100.0
+
+def main():
+    parser = argparse.ArgumentParser(description="Entrenamiento Pure CNN (9 Clases + Class Weights)")
+    parser.add_argument("--seed", type=int, default=42, help="Semilla aleatoria")
+    args = parser.parse_args()
+
+    set_seed(args.seed)
+
+    print("=== PURE CNN2D BASELINE (9 CLASES CON PESOS BALANCEADOS) ===")
+    print(f"Dispositivo activo: {DEVICE} ({torch.cuda.get_device_name(0)}) | Semilla: {args.seed}")
+
+    logger = ExperimentLogger(experiment_name=f"Pure_CNN_9Class_Weighted_Seed_{args.seed}", base_dir=PROJECT_DIR / "runs")
+
+    data_files = {
+        "metadata": META_PATH,
+        "X_train": TENSORS_DIR / "X_train_frames.dat",
+        "X_val": TENSORS_DIR / "X_val_frames.dat",
+        "X_test": TENSORS_DIR / "X_test_frames.dat"
+    }
+
+    meta = np.load(META_PATH, allow_pickle=True)
+
+    # 🚀 Cargar etiquetas crudas originales (0 a 8 personas)
+    train_y = meta['train_y_people']
+    val_y   = meta['val_y_people']
+    test_y  = meta['test_y_people']
+    num_classes = len(np.unique(train_y))
+
+    hyperparameters = {
+        "SEED": args.seed,
+        "NUM_CLASSES": num_classes,
+        "BATCH_SIZE": BATCH_SIZE,
+        "NUM_WORKERS": NUM_WORKERS,
+        "EPOCHS": EPOCHS,
+        "LEARNING_RATE": LEARNING_RATE,
+        "MODEL": "PureCNN2DBaseline_Weighted_9Class",
+        "DEVICE": str(DEVICE)
+    }
+
+    logger.start_experiment(hyperparameters=hyperparameters, data_files=data_files)
+
+    # 🚀 Calcular pesos para las 9 clases
+    class_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=np.unique(train_y),
+        y=train_y
+    )
+    class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32).to(DEVICE)
+    print(f"⚖️ Pesos de 9 clases calculados: {class_weights}")
+
+    test_sets = np.unique(meta['test_set_ids'])
+
+    train_dataset = MemmapCSIDataset(TENSORS_DIR / "X_train_frames.dat", meta['tr_shape'], meta['train_starts'], train_y, meta['train_y_empty'])
+    val_dataset   = MemmapCSIDataset(TENSORS_DIR / "X_val_frames.dat", meta['va_shape'], meta['val_starts'], val_y, meta['val_y_empty'])
+    test_dataset  = MemmapCSIDataset(TENSORS_DIR / "X_test_frames.dat", meta['te_shape'], meta['test_starts'], test_y, meta['test_y_empty'])
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True)
+    val_loader   = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
+    test_loader  = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
+
+    model = PureCNN2DBaseline(num_classes=num_classes).to(DEVICE)
+    criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+
+    best_val_loss = float('inf')
+    best_model_path = CHECKPOINT_DIR / f"pure_cnn_9class_weighted_seed_{args.seed}_best.pth"
+
+    print("\nIniciando entrenamiento...")
+    for epoch in range(1, EPOCHS + 1):
+        tr_loss, tr_acc = train_epoch(model, train_loader, optimizer, criterion, DEVICE)
+        val_loss, val_acc = evaluate(model, val_loader, criterion, DEVICE)
+
+        scheduler.step(val_loss)
+        logger.log_epoch(epoch, tr_loss, tr_acc, val_loss, val_acc)
+
+        print(f"Época [{epoch:02d}/{EPOCHS:02d}] | Train Loss: {tr_loss:.4f} - Acc: {tr_acc:.2f}% | Val Loss: {val_loss:.4f} - Acc: {val_acc:.2f}%")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), best_model_path)
+
+    print("\nCargando mejor modelo para evaluación Cross-Domain...")
+    model.load_state_dict(torch.load(best_model_path))
+    test_loss, test_acc = evaluate(model, test_loader, criterion, DEVICE)
+
+    test_metrics = {
+        "Target_Domain": str(test_sets[0]),
+        "Loss": float(test_loss),
+        "Accuracy_Percent": float(test_acc)
+    }
+
+    logger.end_experiment(test_metrics=test_metrics)
+
+    # 🚀 Generar diagnósticos para las 9 clases
+    run_post_hoc_diagnostics(best_model_path, model_type="cnn", output_dir=logger.output_dir, num_classes=num_classes)
+
+if __name__ == "__main__":
+    main()
