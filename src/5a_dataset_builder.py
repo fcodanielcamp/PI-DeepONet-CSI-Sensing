@@ -70,6 +70,12 @@ def process_file_group_memmap(file_list, input_dir, split_name, output_dir):
         if app_val not in ['E', 'PC'] or not set_val.startswith(TARGET_CAMPAIGN):
             continue
 
+        n_people = get_scalar_safe(mat_data, 'N_People', 0) if app_val == 'PC' else 0
+        
+        # 🚀 Filtro a 5 clases: descartar archivos con 5 personas o más
+        if n_people > 4:
+            continue
+
         csi_key = [k for k in mat_data.keys() if k.upper() == 'CSI'][0]
         csi_matrix = mat_data[csi_key]
         n_frames, n_sc = csi_matrix.shape
@@ -77,7 +83,6 @@ def process_file_group_memmap(file_list, input_dir, split_name, output_dir):
         if n_sc != EXPECTED_SUBCARRIERS or n_frames < MIN_CSI_FRAMES or n_frames < WINDOW_SIZE:
             continue
 
-        n_people = get_scalar_safe(mat_data, 'N_People', 0) if app_val == 'PC' else 0
         is_empty = 1 if app_val == 'E' else 0
 
         local_starts = np.arange(0, n_frames - WINDOW_SIZE + 1, STRIDE)
@@ -147,12 +152,22 @@ def build_dataset():
     df_summary = pd.read_excel(SUMMARY_EXCEL)
     OUTPUT_TENSORS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. 🚀 Incluir archivos de TODOS los receptores Rx
-    df_filtered = df_summary[
-        (df_summary['BW'] == TARGET_BW) &
-        (df_summary['Application'].isin(['E', 'PC'])) &
-        (df_summary['Set'].astype(str).str.startswith(TARGET_CAMPAIGN))
-    ].copy()
+    people_col = 'N_People' if 'N_People' in df_summary.columns else ('N_people' if 'N_people' in df_summary.columns else None)
+
+    # 1. 🚀 Incluir archivos de TODOS los receptores Rx y filtrar <= 4 personas (0 a 4)
+    if people_col:
+        df_filtered = df_summary[
+            (df_summary['BW'] == TARGET_BW) &
+            (df_summary['Application'].isin(['E', 'PC'])) &
+            (df_summary['Set'].astype(str).str.startswith(TARGET_CAMPAIGN)) &
+            ((df_summary['Application'] == 'E') | (df_summary[people_col] <= 4))
+        ].copy()
+    else:
+        df_filtered = df_summary[
+            (df_summary['BW'] == TARGET_BW) &
+            (df_summary['Application'].isin(['E', 'PC'])) &
+            (df_summary['Set'].astype(str).str.startswith(TARGET_CAMPAIGN))
+        ].copy()
 
     # 2. Separación de Dominio Objetivo (Test: MC1-06) vs Dominio Origen (Train/Val)
     test_domains_normalized = [s.replace('_', '-') for s in TEST_SET_DOMAINS]
@@ -163,10 +178,10 @@ def build_dataset():
     source_df = df_filtered[~test_mask].copy()
 
     # Asignar etiqueta de personas para la estratificación
-    people_col = 'N_People' if 'N_People' in source_df.columns else ('N_people' if 'N_people' in source_df.columns else None)
-    if people_col:
+    people_col_source = 'N_People' if 'N_People' in source_df.columns else ('N_people' if 'N_people' in source_df.columns else None)
+    if people_col_source:
         source_df['file_label'] = source_df.apply(
-            lambda r: 0 if str(r['Application']).strip() == 'E' else int(r[people_col]), axis=1
+            lambda r: 0 if str(r['Application']).strip() == 'E' else int(r[people_col_source]), axis=1
         )
     else:
         source_df['file_label'] = source_df['Application'].apply(
