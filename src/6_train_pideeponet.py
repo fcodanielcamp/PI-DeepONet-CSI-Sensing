@@ -138,7 +138,7 @@ def evaluate(
 def main():
   parser = argparse.ArgumentParser(
       description=(
-          "Entrenamiento PI-DeepONet CORAL + Monotonicidad Suave (9 Clases)"
+          "Entrenamiento PI-DeepONet CORAL + Monotonicidad Suave (5 Clases)"
       )
   )
   parser.add_argument(
@@ -184,7 +184,7 @@ def main():
 
   set_seed(args.seed)
 
-  print("=== PI-DEEPONET CORAL + MONOTONICIDAD SUAVE (9 CLASES) ===")
+  print("=== PI-DEEPONET CORAL + MONOTONICIDAD SUAVE (5 CLASES) ===")
   print(
       f"Dispositivo activo: {DEVICE} ({torch.cuda.get_device_name(0)}) |"
       f" Semilla: {args.seed}"

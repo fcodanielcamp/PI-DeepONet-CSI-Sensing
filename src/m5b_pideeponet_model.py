@@ -88,7 +88,7 @@ class TrunkNet(nn.Module):
 
 class PIDeepONet(nn.Module):
 
-  def __init__(self, num_classes=9, latent_dim=128):
+  def __init__(self, num_classes=5, latent_dim=128):  # 🚀 Cambiado a 5 clases
     super(PIDeepONet, self).__init__()
     self.num_classes = num_classes
     self.latent_dim = latent_dim
@@ -101,7 +101,11 @@ class PIDeepONet(nn.Module):
         nn.Dropout(0.2),
         nn.Linear(64, 1, bias=False),
     )
-    self.coral_bias = nn.Parameter(torch.zeros(num_classes - 1))
+    
+    # 🚀 Inicialización mejorada de umbrales ordinales decrecientes para CORAL
+    num_thresholds = num_classes - 1
+    initial_biases = torch.linspace(2.0, -2.0, num_thresholds)
+    self.coral_bias = nn.Parameter(initial_biases)
 
     t_coords = np.linspace(0, 1, 25, dtype=np.float32)
     s_coords = np.linspace(0, 1, 241, dtype=np.float32)
@@ -131,7 +135,7 @@ def compute_pi_loss(
     margin=0.0,
     mix_ratio=0.0,
 ):
-  # 1. Pérdida de datos ordinal CORAL (BCE acumulativa)[cite: 2]
+  # 1. Pérdida de datos ordinal CORAL (BCE acumulativa)
   num_classes = logits.size(1) + 1
   device = logits.device
   levels = torch.arange(num_classes - 1, device=device).float()
@@ -142,12 +146,12 @@ def compute_pi_loss(
   )
   loss_data = torch.sum(bce_loss, dim=1).mean()
 
-  # 2. Pérdida de Energía Dispersada (RCS)[cite: 13]
+  # 2. Pérdida de Energía Dispersada (RCS)
   latent_norms = torch.norm(latent_field, p=2, dim=1)
   target_energy = gamma * y_people.float()
   loss_energy = torch.mean((latent_norms - target_energy) ** 2)
 
-  # 3. Regularización de Monotonicidad Suave (L_mono)[cite: 15]
+  # 3. Regularización de Monotonicidad Suave (L_mono)
   if lambda_mono > 0.0 and latent_field.size(0) > 1:
     batch_size = latent_field.size(0)
     z_phys = (latent_norms - latent_norms.min()) / (

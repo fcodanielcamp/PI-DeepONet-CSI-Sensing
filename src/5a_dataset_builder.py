@@ -24,8 +24,8 @@ TARGET_CAMPAIGN = "MC1"
 EXPECTED_SUBCARRIERS = 241
 MIN_CSI_FRAMES = 400
 
-# Dominio reservado explícitamente para evaluación Cross-Domain
-TEST_SET_DOMAINS = ['MC1_06', 'MC1-06']
+# 🚀 Dominio reservado explícitamente para evaluación Cross-Domain (Incluye variante 'B')
+TEST_SET_DOMAINS = ['MC1_01', 'MC1-01', 'MC1_01B', 'MC1-01B']
 
 def get_scalar_safe(mat_dict: dict, key: str, default=0):
     if key in mat_dict:
@@ -169,7 +169,7 @@ def build_dataset():
             (df_summary['Set'].astype(str).str.startswith(TARGET_CAMPAIGN))
         ].copy()
 
-    # 2. Separación de Dominio Objetivo (Test: MC1-06) vs Dominio Origen (Train/Val)
+    # 2. Separación de Dominio Objetivo (Test: MC1-01) vs Dominio Origen (Train/Val)
     test_domains_normalized = [s.replace('_', '-') for s in TEST_SET_DOMAINS]
     set_series_normalized = df_filtered['Set'].astype(str).str.replace('_', '-')
     test_mask = set_series_normalized.isin(test_domains_normalized)
@@ -232,11 +232,11 @@ def build_dataset():
     mean_phase = float(np.mean(sample_data[:, :, 1]))
     std_phase = float(np.std(sample_data[:, :, 1])) + 1e-8
 
-    print(f"\nEstadísticas Z-Score obtenidas estrictamente del conjunto TRAIN:")
+    print(f"\nEstadísticas Z-Score obtenidas strictly del conjunto TRAIN:")
     print(f"  Amplitud: Mean = {mean_amp:.4f}, Std = {std_amp:.4f}")
     print(f"  Fase: Mean = {mean_phase:.4f}, Std = {std_phase:.4f}")
 
-    # 5. Normalizar archivos en disco por bloques
+    # 5. Normalizar archivos en disco por bloques (Comprobando que la ruta exista)
     print("\nAplicando estandarización Z-score en disco por bloques...")
     chunk_size = 500000
     for i in range(0, tr_shape[0], chunk_size):
@@ -248,6 +248,8 @@ def build_dataset():
         X_tr_mem_rw.flush()
 
     for path_i, shape_i in [(va_path, va_shape), (te_path, te_shape)]:
+        if path_i is None or not Path(path_i).exists():
+            continue
         X_mem_rw = np.memmap(path_i, dtype='float16', mode='r+', shape=shape_i)
         for i in range(0, shape_i[0], chunk_size):
             chunk = X_mem_rw[i: i + chunk_size, :, :].astype(np.float32)
@@ -268,17 +270,21 @@ def build_dataset():
         val_y_people=va_people, val_y_empty=va_empty,
         val_file_ids=va_ids, val_set_ids=va_sets,
         val_env_ids=va_envs, val_date_ids=va_dates,
-        te_shape=te_shape, test_starts=te_starts,
-        test_y_people=te_people, test_y_empty=te_empty,
-        test_file_ids=te_ids, test_set_ids=te_sets,
-        test_env_ids=te_envs, test_date_ids=te_dates,
+        te_shape=te_shape if te_shape is not None else np.array([]),
+        test_starts=te_starts if te_starts is not None else np.array([]),
+        test_y_people=te_people if te_people is not None else np.array([]),
+        test_y_empty=te_empty if te_empty is not None else np.array([]),
+        test_file_ids=te_ids if te_ids is not None else np.array([]),
+        test_set_ids=te_sets if te_sets is not None else np.array([]),
+        test_env_ids=te_envs if te_envs is not None else np.array([]),
+        test_date_ids=te_dates if te_dates is not None else np.array([]),
         stats=np.array([mean_amp, std_amp, mean_phase, std_phase], dtype=np.float32)
     )
 
     print(f"\nResumen de Ventanas Multi-Rx Generadas:")
     print(f"  - Train: {len(tr_starts)} ventanas ({n_tr_files} archivos)")
     print(f"  - Val: {len(va_starts)} ventanas ({n_va_files} archivos)")
-    print(f"  - Test: {len(te_starts)} ventanas ({n_te_files} archivos Dominio Target No Visto)")
+    print(f"  - Test: {len(te_starts) if te_starts is not None else 0} ventanas ({n_te_files} archivos Dominio Target No Visto)")
     print(f"\n¡Dataset Multi-Rx reconstruido exitosamente en: '{save_meta_path}'!")
 
 if __name__ == "__main__":
