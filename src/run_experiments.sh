@@ -1,31 +1,63 @@
 #!/bin/bash
 
-# Semilla única fijada para comparativa justa
+# Terminar la ejecución si ocurre algún error en la cadena
+set -e
+
 SEED=42
 
 echo "================================================================="
-echo " 🚀 INICIANDO BATERÍA DE EXPERIMENTOS (5 CLASES): COMPOSICIÓN Y COMPARATIVA"
+echo " 🚀 BATERÍA DE EXPERIMENTOS CONSENSUS: ABLACIÓN FÍSICA (5 CLASES)"
 echo "================================================================="
 
-# 1/3: PI-DeepONet con Regularización Física Integrada
+# Experimento 1 (Control): Baseline Data-Driven Puro
+# Latente abstracto (128), solo loss CORAL activa
 echo ""
-echo "=== [1/3] Ejecutando PI-DeepONet con Física (L_energy=0.01, L_mono=0.001) ==="
-python3 6_train_pideeponet.py --seed "$SEED" --lambda_energy 0.01 --lambda_mono 0.001 --margin 0.0 --warmup_epochs 5 --mix_ratio 0.0
+echo "=== [1/3] Exp 1: Baseline Data-Driven (Latente abstracto 128, solo L_CORAL) ==="
+python3 6_train_pideeponet.py \
+    --seed "$SEED" \
+    --use_physics_latent 0 \
+    --latent_dim 128 \
+    --lambda_rec 0.0 \
+    --lambda_cir 0.0 \
+    --lambda_dd 0.0 \
+    --lambda_smooth 0.0 \
+    --lambda_sparse 0.0 \
+    --warmup_epochs 0
 
-# 2/3: DeepONet Data-Driven Puro (Pérdidas físicas desactivadas)
+# Experimento 2 (Ablación de Representación): Latente Físico sin Restricciones
+# Ramas CIR (64) + Doppler (64), activa loss de reconstrucción (L_rec = 1.0)
 echo ""
-echo "=== [2/3] Ejecutando DeepONet Pure Data-Driven (L_energy=0.0, L_mono=0.0) ==="
-python3 6_train_pideeponet.py --seed "$SEED" --lambda_energy 0.0 --lambda_mono 0.0 --margin 0.0 --warmup_epochs 0 --mix_ratio 0.0
+echo "=== [2/3] Exp 2: Latente Físico sin Restricciones (CIR+Doppler, L_CORAL + L_rec) ==="
+python3 6_train_pideeponet.py \
+    --seed "$SEED" \
+    --use_physics_latent 1 \
+    --latent_dim 128 \
+    --lambda_rec 1.0 \
+    --lambda_cir 0.0 \
+    --lambda_dd 0.0 \
+    --lambda_smooth 0.0 \
+    --lambda_sparse 0.0 \
+    --warmup_epochs 0
 
-# 3/3: Pure CNN Baseline
+# Experimento 3 (Intervención Física): Physics-Informed Completo
+# Ramas CIR (64) + Doppler (64), activa todas las losses físicas + Warmup por etapas
 echo ""
-echo "=== [3/3] Ejecutando Pure CNN2D Baseline ==="
-python3 6c_train_pure_cnn.py --seed "$SEED"
+echo "=== [3/3] Exp 3: Physics-Informed Completo (CIR+Doppler, Todas las Pérdidas Físicas) ==="
+python3 6_train_pideeponet.py \
+    --seed "$SEED" \
+    --use_physics_latent 1 \
+    --latent_dim 128 \
+    --lambda_rec 1.0 \
+    --lambda_cir 0.01 \
+    --lambda_dd 0.01 \
+    --lambda_smooth 0.001 \
+    --lambda_sparse 0.001 \
+    --warmup_epochs 5
 
-# Reporte Global Consolidado
+# Reporte Global Consolidado y Diagnósticos
 echo ""
-echo "=== Generando Reporte Comparativo Global Markdown ==="
+echo "=== Generando Reporte Comparativo Global y Diagnósticos Markdown ==="
 python3 generate_summary_report.py
 
 echo ""
-echo "✅ ¡Experimentos completados y reporte consolidado generado con éxito!"
+echo "✅ ¡Secuencia de 3 experimentos completada con éxito!"

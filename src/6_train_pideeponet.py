@@ -45,31 +45,46 @@ def train_epoch(
     margin,
     mix_ratio,
     gamma,
+    lambda_rec,
+    lambda_cir,
+    lambda_dop,
 ):
   model.train()
-  running_loss, running_loss_energy, running_loss_mono = 0.0, 0.0, 0.0
+  running_loss, running_loss_phys, running_loss_energy, running_loss_mono = (
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+  )
   correct, total = 0, 0
 
   for x_b, y_people in dataloader:
     x_b, y_people = x_b.to(device), y_people.to(device)
 
     optimizer.zero_grad()
-    logits, latent_field = model(x_b)
+    logits, latent_field, b_out, H_hat = model(x_b)
 
-    loss, _, loss_energy, loss_mono = compute_pi_loss(
+    loss, _, loss_phys, loss_energy, loss_mono = compute_pi_loss(
         logits,
         latent_field,
+        b_out,
+        H_hat,
+        x_b,
         y_people,
         lambda_energy=lambda_energy,
         gamma=gamma,
         lambda_mono=lambda_mono,
         margin=margin,
         mix_ratio=mix_ratio,
+        lambda_rec=lambda_rec,
+        lambda_cir=lambda_cir,
+        lambda_dop=lambda_dop,
     )
     loss.backward()
     optimizer.step()
 
     running_loss += loss.item() * x_b.size(0)
+    running_loss_phys += loss_phys.item() * x_b.size(0)
     running_loss_energy += loss_energy.item() * x_b.size(0)
     running_loss_mono += loss_mono.item() * x_b.size(0)
 
@@ -82,6 +97,7 @@ def train_epoch(
   return (
       running_loss / total,
       (correct / total) * 100.0,
+      running_loss_phys / total,
       running_loss_energy / total,
       running_loss_mono / total,
   )
@@ -96,28 +112,43 @@ def evaluate(
     margin,
     mix_ratio,
     gamma,
+    lambda_rec,
+    lambda_cir,
+    lambda_dop,
 ):
   model.eval()
-  running_loss, running_loss_energy, running_loss_mono = 0.0, 0.0, 0.0
+  running_loss, running_loss_phys, running_loss_energy, running_loss_mono = (
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+  )
   correct, total = 0, 0
 
   with torch.no_grad():
     for x_b, y_people in dataloader:
       x_b, y_people = x_b.to(device), y_people.to(device)
 
-      logits, latent_field = model(x_b)
-      loss, _, loss_energy, loss_mono = compute_pi_loss(
+      logits, latent_field, b_out, H_hat = model(x_b)
+      loss, _, loss_phys, loss_energy, loss_mono = compute_pi_loss(
           logits,
           latent_field,
+          b_out,
+          H_hat,
+          x_b,
           y_people,
           lambda_energy=lambda_energy,
           gamma=gamma,
           lambda_mono=lambda_mono,
           margin=margin,
           mix_ratio=mix_ratio,
+          lambda_rec=lambda_rec,
+          lambda_cir=lambda_cir,
+          lambda_dop=lambda_dop,
       )
 
       running_loss += loss.item() * x_b.size(0)
+      running_loss_phys += loss_phys.item() * x_b.size(0)
       running_loss_energy += loss_energy.item() * x_b.size(0)
       running_loss_mono += loss_mono.item() * x_b.size(0)
 
@@ -130,6 +161,7 @@ def evaluate(
   return (
       running_loss / total,
       (correct / total) * 100.0,
+      running_loss_phys / total,
       running_loss_energy / total,
       running_loss_mono / total,
   )
@@ -138,7 +170,8 @@ def evaluate(
 def main():
   parser = argparse.ArgumentParser(
       description=(
-          "Entrenamiento PI-DeepONet CORAL + Monotonicidad Suave (5 Clases)"
+          "Entrenamiento PI-DeepONet con Latente Físico, Consistencia Fourier"
+          " y CORAL"
       )
   )
   parser.add_argument(
@@ -157,6 +190,24 @@ def main():
       help="Coeficiente para monotonicidad suave",
   )
   parser.add_argument(
+      "--lambda_rec",
+      type=float,
+      default=0.1,
+      help="Coeficiente para reconstrucción CSI",
+  )
+  parser.add_argument(
+      "--lambda_cir",
+      type=float,
+      default=0.01,
+      help="Coeficiente para reconstrucción CIR",
+  )
+  parser.add_argument(
+      "--lambda_dop",
+      type=float,
+      default=0.01,
+      help="Coeficiente para reconstrucción Doppler",
+  )
+  parser.add_argument(
       "--margin",
       type=float,
       default=0.0,
@@ -166,13 +217,13 @@ def main():
       "--warmup_epochs",
       type=int,
       default=5,
-      help="Épocas de warm-up sin monotonicidad",
+      help="Épocas de warm-up sin pérdidas físicas secundarias",
   )
   parser.add_argument(
       "--mix_ratio",
       type=float,
       default=0.0,
-      help="Proporción de pares aleatorios (0.0=vecinos, 0.3=70/30)",
+      help="Proporción de pares aleatorios",
   )
   parser.add_argument(
       "--gamma",
@@ -184,19 +235,16 @@ def main():
 
   set_seed(args.seed)
 
-  print("=== PI-DEEPONET CORAL + MONOTONICIDAD SUAVE (5 CLASES) ===")
+  print(
+      "=== PI-DEEPONET FISICA + CONSISTENCIA FOURIER + CORAL (5 CLASES) ==="
+  )
   print(
       f"Dispositivo activo: {DEVICE} ({torch.cuda.get_device_name(0)}) |"
       f" Semilla: {args.seed}"
   )
-  print(
-      f"Parámetros -> L_energy: {args.lambda_energy} | L_mono: {args.lambda_mono}"
-      f" | Margin: {args.margin} | Warmup: {args.warmup_epochs} | MixRatio:"
-      f" {args.mix_ratio}"
-  )
 
   exp_name = (
-      f"PI_DeepONet_CORAL_Lenergy_{args.lambda_energy}_Lmono_{args.lambda_mono}_Margin_{args.margin}_Mix_{args.mix_ratio}_Seed_{args.seed}"
+      f"PI_DeepONet_Physics_Rec_{args.lambda_rec}_CIR_{args.lambda_cir}_Dop_{args.lambda_dop}_Seed_{args.seed}"
   )
   logger = ExperimentLogger(
       experiment_name=exp_name, base_dir=PROJECT_DIR / "runs"
@@ -225,26 +273,16 @@ def main():
       "LEARNING_RATE": LEARNING_RATE,
       "LAMBDA_ENERGY": args.lambda_energy,
       "LAMBDA_MONO": args.lambda_mono,
-      "MARGIN": args.margin,
-      "WARMUP_EPOCHS": args.warmup_epochs,
-      "MIX_RATIO": args.mix_ratio,
-      "GAMMA": args.gamma,
-      "MODEL": "PI-DeepONet_CORAL_Monotonic_Energy",
+      "LAMBDA_REC": args.lambda_rec,
+      "LAMBDA_CIR": args.lambda_cir,
+      "LAMBDA_DOP": args.lambda_dop,
+      "MODEL": "PI-DeepONet_Physics_Fourier",
       "DEVICE": str(DEVICE),
   }
 
   logger.start_experiment(
       hyperparameters=hyperparameters, data_files=data_files
   )
-
-  class_weights = compute_class_weight(
-      class_weight="balanced", classes=np.unique(train_y), y=train_y
-  )
-  class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32).to(
-      DEVICE
-  )
-
-  test_sets = np.unique(meta["test_set_ids"])
 
   train_dataset = MemmapCSIDataset(
       TENSORS_DIR / "X_train_frames.dat",
@@ -297,54 +335,74 @@ def main():
 
   best_val_loss = float("inf")
   best_model_path = (
-      CHECKPOINT_DIR
-      / f"pideeponet_coral_lmono_{args.lambda_mono}_seed_{args.seed}_best.pth"
+      CHECKPOINT_DIR / f"pideeponet_physics_seed_{args.seed}_best.pth"
   )
 
   for epoch in range(1, EPOCHS + 1):
-    active_lambda_mono = (
-        args.lambda_mono if epoch > args.warmup_epochs else 0.0
-    )
+    # Programación de Warmup Físico Gradual
+    if epoch <= args.warmup_epochs:
+      active_rec, active_cir, active_dop = args.lambda_rec, 0.0, 0.0
+      active_mono = 0.0
+    elif epoch <= 10:
+      active_rec, active_cir, active_dop = (
+          args.lambda_rec,
+          args.lambda_cir,
+          0.0,
+      )
+      active_mono = args.lambda_mono
+    else:
+      active_rec, active_cir, active_dop = (
+          args.lambda_rec,
+          args.lambda_cir,
+          args.lambda_dop,
+      )
+      active_mono = args.lambda_mono
 
-    tr_loss, tr_acc, tr_energy, tr_mono = train_epoch(
+    tr_loss, tr_acc, tr_phys, tr_energy, tr_mono = train_epoch(
         model,
         train_loader,
         optimizer,
         DEVICE,
         args.lambda_energy,
-        active_lambda_mono,
+        active_mono,
         args.margin,
         args.mix_ratio,
         args.gamma,
+        active_rec,
+        active_cir,
+        active_dop,
     )
-    val_loss, val_acc, val_energy, val_mono = evaluate(
+
+    val_loss, val_acc, val_phys, val_energy, val_mono = evaluate(
         model,
         val_loader,
         DEVICE,
         args.lambda_energy,
-        active_lambda_mono,
+        active_mono,
         args.margin,
         args.mix_ratio,
         args.gamma,
+        active_rec,
+        active_cir,
+        active_dop,
     )
 
     scheduler.step(val_loss)
 
     extra_metrics = {
+        "tr_loss_phys": round(tr_phys, 6),
+        "val_loss_phys": round(val_phys, 6),
         "tr_loss_energy": round(tr_energy, 6),
         "val_loss_energy": round(val_energy, 6),
-        "tr_loss_mono": round(tr_mono, 6),
-        "val_loss_mono": round(val_mono, 6),
     }
     logger.log_epoch(
         epoch, tr_loss, tr_acc, val_loss, val_acc, extra_metrics=extra_metrics
     )
 
     print(
-        f"Época [{epoch:02d}/{EPOCHS:02d}] | Train Loss: {tr_loss:.4f} (Energy:"
-        f" {tr_energy:.6f}, Mono: {tr_mono:.6f}) - Acc: {tr_acc:.2f}% | Val"
-        f" Loss: {val_loss:.4f} (Energy: {val_energy:.6f}, Mono:"
-        f" {val_mono:.6f}) - Acc: {val_acc:.2f}%"
+        f"Época [{epoch:02d}/{EPOCHS:02d}] | Train Loss: {tr_loss:.4f} (Phys:"
+        f" {tr_phys:.4f}) - Acc: {tr_acc:.2f}% | Val Loss: {val_loss:.4f}"
+        f" (Phys: {val_phys:.4f}) - Acc: {val_acc:.2f}%"
     )
 
     if val_loss < best_val_loss:
@@ -353,7 +411,7 @@ def main():
 
   print("\nCargando mejor modelo para evaluación Cross-Domain...")
   model.load_state_dict(torch.load(best_model_path))
-  test_loss, test_acc, _, _ = evaluate(
+  test_loss, test_acc, _, _, _ = evaluate(
       model,
       test_loader,
       DEVICE,
@@ -362,10 +420,13 @@ def main():
       args.margin,
       args.mix_ratio,
       args.gamma,
+      args.lambda_rec,
+      args.lambda_cir,
+      args.lambda_dop,
   )
 
   test_metrics = {
-      "Target_Domain": str(test_sets[0]),
+      "Target_Domain": str(np.unique(meta["test_set_ids"])[0]),
       "Loss": float(test_loss),
       "Accuracy_Percent": float(test_acc),
   }

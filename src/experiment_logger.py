@@ -1,191 +1,252 @@
-import os
-import sys
-import platform
-import json
-import hashlib
-import time
-import shutil
-from datetime import datetime
 from pathlib import Path
-import pandas as pd
+import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
+from sklearn.metrics import (
+    auc,
+    balanced_accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    roc_curve,
+)
+from sklearn.preprocessing import label_binarize
 import torch
-import importlib.metadata
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
-class ExperimentLogger:
-    def __init__(self, experiment_name="PI_DeepONet_Experiment", base_dir=None):
-        if base_dir is None:
-            project_dir = Path(__file__).resolve().parent.parent
-        else:
-            project_dir = Path(base_dir).parent
+from m5b_pideeponet_model import MemmapCSIDataset, PIDeepONet
 
-        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.folder_name = f"{experiment_name}_{self.timestamp}"
-        
-        # 1. Carpeta en runs/ para pesajes .pth (NO se sube a Git)
-        self.run_dir = project_dir / "runs" / self.folder_name
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        # 2. Carpeta en outputs/ para métricas, gráficos y código (SÍ se sube a Git)
-        self.output_dir = project_dir / "output" / self.folder_name
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.metrics_history = []
-        self.start_time = None
-        self.end_time = None
+def _evaluate_split(model, loader, model_type, num_classes):
+  model.eval()
+  all_preds = []
+  all_targets = []
+  all_probs = []
 
-    def _get_sha256(self, file_path):
-        file_path = Path(file_path)
-        if not file_path.exists():
-            return "File Not Found"
-        sha256_hash = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
+  with torch.no_grad():
+    for batch in loader:
+      x_b = batch[0].to(DEVICE)
+      y_people = batch[1].to(DEVICE)
 
-    def _snapshot_code(self):
-        """Copia una instantánea de todos los programas de Python en src/ hacia outputs/"""
-        src_dir = Path(__file__).resolve().parent
-        snapshot_dir = self.output_dir / "code_snapshot"
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
+      if model_type.lower() == 'pideeponet':
+        # PIDeepONet devuelve (logits, latent_field, b_out, H_hat)
+        logits, _, _, _ = model(x_b)
+      else:
+        logits = model(x_b)
 
-        for py_file in src_dir.glob("*.py"):
-            shutil.copy2(py_file, snapshot_dir / py_file.name)
+      is_coral = logits.size(1) == num_classes - 1
 
-    def get_environment_info(self):
-        env_info = {
-            "Fecha_Hora": self.timestamp,
-            "OS": platform.system(),
-            "OS_Release": platform.release(),
-            "OS_Version": platform.version(),
-            "Architecture": platform.machine(),
-            "Python_Version": sys.version.split()[0],
-            "CUDA_Available": torch.cuda.is_available(),
-            "PyTorch_Version": torch.__version__,
-        }
+      if is_coral:
+        cum_probs = torch.sigmoid(logits)
+        preds = torch.sum(cum_probs > 0.5, dim=1)
 
-        if torch.cuda.is_available():
-            env_info["GPU_Name"] = torch.cuda.get_device_name(0)
-            env_info["GPU_Capability"] = f"{torch.cuda.get_device_capability(0)[0]}.{torch.cuda.get_device_capability(0)[1]}"
-            env_info["GPU_VRAM_GB"] = round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
-            env_info["CUDA_Version"] = torch.version.cuda
+        batch_size = logits.size(0)
+        probs = torch.zeros(batch_size, num_classes, device=DEVICE)
 
-        installed_packages = {}
-        for dist in importlib.metadata.distributions():
-            installed_packages[dist.metadata["Name"]] = dist.version
+        probs[:, 0] = 1.0 - cum_probs[:, 0]
+        for k in range(1, num_classes - 1):
+          probs[:, k] = cum_probs[:, k - 1] - cum_probs[:, k]
+        probs[:, -1] = cum_probs[:, -1]
 
-        env_info["Libraries"] = dict(sorted(installed_packages.items()))
-        return env_info
+        probs = torch.clamp(probs, min=0.0, max=1.0)
+      else:
+        probs = F.softmax(logits, dim=1)
+        preds = torch.argmax(logits, dim=1)
 
-    def start_experiment(self, hyperparameters, data_files):
-        self.start_time = time.time()
+      all_preds.extend(preds.cpu().numpy())
+      all_targets.extend(y_people.cpu().numpy())
+      all_probs.extend(probs.cpu().numpy())
 
-        # Resguardo automático de los scripts de código fuente en outputs/
-        self._snapshot_code()
+  return np.array(all_targets), np.array(all_preds), np.array(all_probs)
 
-        self.config = {
-            "Hyperparameters": hyperparameters,
-            "Data_Files": {str(k): {"path": str(v), "sha256": self._get_sha256(v)} for k, v in data_files.items()},
-            "Environment": self.get_environment_info()
-        }
 
-        with open(self.output_dir / "config.json", "w", encoding="utf-8") as f:
-            json.dump(self.config, f, indent=4)
+def run_post_hoc_diagnostics(
+    model_path,
+    model_type='pideeponet',
+    output_dir=None,
+    run_dir=None,
+    num_classes=5,
+    latent_dim=128,
+):
+  model_path = Path(model_path)
+  if not model_path.exists():
+    print(
+        '⚠️ Aviso: No se encontró el modelo en'
+        f' {model_path} para el diagnóstico.'
+    )
+    return
 
-    def log_epoch(self, epoch, train_loss, train_acc, val_loss, val_acc, extra_metrics=None):
-        entry = {
-            "epoch": epoch,
-            "train_loss": float(train_loss),
-            "train_acc": float(train_acc),
-            "val_loss": float(val_loss),
-            "val_acc": float(val_acc)
-        }
-        if extra_metrics:
-            entry.update(extra_metrics)
+  # Determinar la carpeta de diagnósticos priorizando output_dir
+  if output_dir is not None:
+    diagnostics_dir = Path(output_dir) / 'diagnostics'
+  elif run_dir is not None:
+    diagnostics_dir = Path(run_dir) / 'diagnostics'
+  else:
+    project_dir = model_path.parent.parent
+    diagnostics_dir = project_dir / 'output' / 'diagnostics'
 
-        self.metrics_history.append(entry)
+  diagnostics_dir.mkdir(parents=True, exist_ok=True)
+  print(f'\n📊 Guardando diagnósticos completos en: {diagnostics_dir}')
 
-    def end_experiment(self, test_metrics=None):
-        self.end_time = time.time()
-        total_duration_sec = self.end_time - self.start_time
+  project_dir = model_path.parent.parent
+  tensors_dir = project_dir / 'data' / 'processed_tensors'
+  meta_path = tensors_dir / 'dataset_mc1_rx1_80mhz_meta.npz'
 
-        df_metrics = pd.DataFrame(self.metrics_history)
-        csv_metrics_path = self.output_dir / "metrics_history.csv"
-        df_metrics.to_csv(csv_metrics_path, index=False)
+  if not meta_path.exists():
+    print(
+        '⚠️ Aviso: No se encontró el archivo de metadatos en'
+        f' {meta_path}.'
+    )
+    return
 
-        summary_data = {
-            "Timestamp": [self.timestamp],
-            "Duracion_Minutos": [round(total_duration_sec / 60.0, 2)],
-            "Epocas_Completadas": [len(self.metrics_history)],
-            "Best_Val_Loss": [df_metrics["val_loss"].min() if not df_metrics.empty else None],
-            "Best_Val_Acc": [df_metrics["val_acc"].max() if not df_metrics.empty else None],
-        }
-        if test_metrics:
-            for k, v in test_metrics.items():
-                summary_data[f"Test_{k}"] = [v]
+  meta = np.load(meta_path, allow_pickle=True)
 
-        df_summary = pd.DataFrame(summary_data)
-        csv_summary_path = self.output_dir / "summary.csv"
-        df_summary.to_csv(csv_summary_path, index=False)
+  tr_y = meta['train_y_people']
+  va_y = meta['val_y_people']
+  te_y = meta['test_y_people']
+  num_classes = len(np.unique(tr_y))
+  class_names = [f'{i} Pers.' for i in range(num_classes)]
 
-        df_libs = pd.DataFrame(
-            list(self.config["Environment"]["Libraries"].items()),
-            columns=["Library", "Version"]
-        )
-        csv_libs_path = self.output_dir / "environment_libraries.csv"
-        df_libs.to_csv(csv_libs_path, index=False)
+  datasets = {
+      'Train': MemmapCSIDataset(
+          tensors_dir / 'X_train_frames.dat',
+          meta['tr_shape'],
+          meta['train_starts'],
+          tr_y,
+      ),
+      'Val': MemmapCSIDataset(
+          tensors_dir / 'X_val_frames.dat',
+          meta['va_shape'],
+          meta['val_starts'],
+          va_y,
+      ),
+      'Test': MemmapCSIDataset(
+          tensors_dir / 'X_test_frames.dat',
+          meta['te_shape'],
+          meta['test_starts'],
+          te_y,
+      ),
+  }
 
-        self._generate_markdown_report(total_duration_sec, test_metrics, df_metrics)
+  # Carga segura y flexible del modelo
+  if model_type.lower() == 'pideeponet':
+    model = PIDeepONet(num_classes=num_classes, latent_dim=latent_dim).to(
+        DEVICE
+    )
+  else:
+    try:
+      from m6_cnn_baseline_model import PureCNN2DBaseline
 
-        print(f"\n📂 Documentación y métricas livianas guardadas en:")
-        print(f"  👉 {self.output_dir.resolve()}")
-        print(f"💾 Checkpoints de modelos pesados guardados en:")
-        print(f"  👉 {self.run_dir.resolve()}")
+      model = PureCNN2DBaseline(num_classes=num_classes).to(DEVICE)
+    except ImportError:
+      print(
+          '⚠️ Error: No se pudo importar `PureCNN2DBaseline` desde'
+          ' `m6_cnn_baseline_model`.'
+      )
+      return
 
-    def _generate_markdown_report(self, duration_sec, test_metrics, df_metrics):
-        md_path = self.output_dir / "reporte_experimento.md"
-        env = self.config["Environment"]
-        hp = self.config["Hyperparameters"]
-        files = self.config["Data_Files"]
+  model.load_state_dict(torch.load(model_path, map_location=DEVICE))
 
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(f"# 🔬 Reporte Científico de Experimento: {self.timestamp}\n\n")
+  # --- 1. GENERACIÓN DE MATRICES DE CONFUSIÓN Y REPORTES ---
+  fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+  summary_report_str = (
+      '=== REPORTE DETALLADO DE DIAGNÓSTICO (TRAIN / VAL / TEST) ===\n\n'
+  )
 
-            f.write("## 1. Resumen de Ejecución\n")
-            f.write(f"- **Duración Total:** {duration_sec / 60.0:.2f} minutos ({duration_sec:.1f} segundos)\n")
-            f.write(f"- **Épocas Ejecutadas:** {len(df_metrics)}\n")
-            if test_metrics:
-                for k, v in test_metrics.items():
-                    f.write(f"- **Test {k}:** {v}\n")
-            f.write("\n---\n")
+  test_y_true, test_y_probs = None, None
 
-            f.write("## 2. Entorno de Hardware y Software\n")
-            f.write(f"- **Sistema Operativo:** {env['OS']} {env['OS_Release']} ({env['Architecture']})\n")
-            f.write(f"- **Python Version:** {env['Python_Version']}\n")
-            f.write(f"- **PyTorch Version:** {env['PyTorch_Version']}\n")
-            if env['CUDA_Available']:
-                f.write(f"- **GPU:** {env['GPU_Name']} ({env['GPU_VRAM_GB']} GB VRAM)\n")
-                f.write(f"- **CUDA Version:** {env['CUDA_Version']}\n")
-            f.write("\n### Bibliotecas Clave Instaladas\n")
-            f.write("| Biblioteca | Versión |\n| :--- | :--- |\n")
-            for lib_name in ["torch", "numpy", "pandas", "scipy", "scikit-learn", "torchinfo", "torchviz", "onnx"]:
-                if lib_name in env["Libraries"]:
-                    f.write(f"| `{lib_name}` | `{env['Libraries'][lib_name]}` |\n")
-            f.write(f"\n*(Ver lista completa de {len(env['Libraries'])} bibliotecas en `environment_libraries.csv`)*\n\n---\n")
+  for idx, (split_name, dataset) in enumerate(datasets.items()):
+    loader = DataLoader(dataset, batch_size=256, shuffle=False, num_workers=4)
 
-            f.write("## 3. Configuración e Hiperparámetros\n")
-            f.write("| Parámetro | Valor |\n| :--- | :--- |\n")
-            for k, v in hp.items():
-                f.write(f"| `{k}` | `{v}` |\n")
-            f.write("\n---\n")
+    y_true, y_pred, y_probs = _evaluate_split(
+        model, loader, model_type, num_classes
+    )
 
-            f.write("## 4. Trazabilidad de Archivos de Datos (Hashes SHA-256)\n")
-            f.write("| Identificador | Ruta | SHA-256 Hash |\n| :--- | :--- | :--- |\n")
-            for k, v in files.items():
-                f.write(f"| `{k}` | `{v['path']}` | `{v['sha256'][:16]}...` |\n")
-            f.write("\n---\n")
+    if split_name == 'Test':
+      test_y_true = y_true
+      test_y_probs = y_probs
 
-            f.write("## 5. Historial de Entrenamiento por Época\n")
-            f.write(df_metrics.to_markdown(index=False))
-            f.write("\n")
+    # Matriz de confusión con protección ante divisiones por cero (clases no predichas)
+    cm = confusion_matrix(
+        y_true, y_pred, labels=list(range(num_classes)), normalize='true'
+    )
+    cm = np.nan_to_num(cm)
+
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt='.2f',
+        cmap='Blues',
+        cbar=False,
+        xticklabels=class_names,
+        yticklabels=class_names,
+        ax=axes[idx],
+    )
+    axes[idx].set_title(f'Matriz de Confusión - {split_name}')
+    axes[idx].set_xlabel('Predicción del Modelo')
+    axes[idx].set_ylabel('Real')
+
+    macro_f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+    balanced_acc = balanced_accuracy_score(y_true, y_pred)
+    pred_counts = np.bincount(y_pred, minlength=num_classes)
+
+    summary_report_str += '=========================================\n'
+    summary_report_str += f' SPLIT: {split_name.upper()}\n'
+    summary_report_str += '=========================================\n'
+    summary_report_str += classification_report(
+        y_true, y_pred, target_names=class_names, digits=4, zero_division=0
+    )
+    summary_report_str += f'--- MÉTRICAS CONSENSUS ({split_name}) ---\n'
+    summary_report_str += f'macro_f1 = {macro_f1:.4f}\n'
+    summary_report_str += f'balanced_acc = {balanced_acc:.4f}\n'
+    summary_report_str += f'pred_counts = {pred_counts}\n\n'
+
+  plt.tight_layout()
+  plt.savefig(diagnostics_dir / 'confusion_matrix_all_splits.png', dpi=300)
+  plt.close()
+
+  # --- 2. GENERACIÓN DE CURVA ROC MULTI-CLASE ---
+  if test_y_true is not None and test_y_probs is not None:
+    y_true_bin = label_binarize(test_y_true, classes=list(range(num_classes)))
+    plt.figure(figsize=(8, 6))
+
+    for i in range(num_classes):
+      fpr, tpr, _ = roc_curve(y_true_bin[:, i], test_y_probs[:, i])
+      roc_auc = auc(fpr, tpr)
+      plt.plot(
+          fpr,
+          tpr,
+          lw=2,
+          label=f'Clase {class_names[i]} (AUC = {roc_auc:.4f})',
+      )
+
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlabel('Tasa de Falsos Positivos (FPR)')
+    plt.ylabel('Tasa de Verdaderos Positivos (TPR)')
+    plt.title(f'Curva ROC Multi-Clase (Test Target - {model_path.stem})')
+    plt.legend(loc='lower right')
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(diagnostics_dir / 'roc_curve_test.png', dpi=300)
+    plt.close()
+
+  with open(
+      diagnostics_dir / 'classification_report.txt', 'w', encoding='utf-8'
+  ) as f:
+    f.write(summary_report_str)
+
+  print('✅ Reporte multi-split y métricas Consensus generadas.')
+  print(
+      '✅ Matrices de confusión guardadas en:'
+      f" {diagnostics_dir / 'confusion_matrix_all_splits.png'}"
+  )
+  print(
+      f"✅ Curva ROC guardada en: {diagnostics_dir / 'roc_curve_test.png'}"
+  )
+
+
+if __name__ == '__main__':
+  pass
