@@ -1,0 +1,2 @@
+Timestamp,Duracion_Minutos,Epocas_Completadas,Best_Val_Loss,Best_Val_Acc,Test_Target_Domain,Test_Loss,Test_Accuracy_Percent
+2026-08-18_14-52-08,50.68,15,1.412055345757828,55.406590069342506,MC1-01B,9.489017047778185,15.793065507900364
