@@ -75,8 +75,14 @@ def generate_global_report():
         try:
           df_sum = pd.read_csv(summary_path)
           if not df_sum.empty:
-            last_row = df_sum.iloc[-1]
+            # 🚀 CORRECCIÓN: las columnas se pasan a minúsculas ANTES de
+            # extraer last_row. Antes, last_row conservaba los nombres
+            # originales (Best_Val_Loss, Best_Val_Acc) mientras el bucle
+            # de búsqueda usaba claves en minúsculas (best_val_loss,
+            # best_val_acc) -> KeyError silencioso capturado por el except
+            # genérico, dejando val_loss/val_acc en "N/A" siempre.
             df_sum.columns = [c.lower() for c in df_sum.columns]
+            last_row = df_sum.iloc[-1]
 
             # Búsqueda de loss
             for col in ["best_val_loss", "val_loss", "v_loss", "loss"]:
