@@ -6,11 +6,10 @@ Este reporte consolida el rendimiento de los modelos y sus respectivas matrices 
 
 | Experiment                                                                | Model                       | Seed   | Val_Loss   | Val_Acc   |
 |:--------------------------------------------------------------------------|:----------------------------|:-------|:-----------|:----------|
-| PI_DeepONet_Physics_Rec_0.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-19_07-44-12   | PI-DeepONet_Physics_Fourier | 42     | N/A        | N/A       |
-| PI_DeepONet_Physics_Rec_1.0_CIR_0.01_Dop_0.01_Seed_42_2026-08-19_10-41-50 | PI-DeepONet_Physics_Fourier | 42     | N/A        | N/A       |
-| PI_DeepONet_Physics_Rec_1.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-19_09-13-02   | PI-DeepONet_Physics_Fourier | 42     | N/A        | N/A       |
+| PI_DeepONet_Physics_Rec_0.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-18_14-52-08   | PI-DeepONet_Physics_Fourier | 42     | N/A        | N/A       |
+| PI_DeepONet_Physics_Rec_1.0_CIR_0.01_Dop_0.01_Seed_42_2026-08-18_16-37-41 | PI-DeepONet_Physics_Fourier | 42     | N/A        | N/A       |
+| PI_DeepONet_Physics_Rec_1.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-18_15-44-51   | PI-DeepONet_Physics_Fourier | 42     | N/A        | N/A       |
 | legacy-l_temp-l_empty                                                     | Unknown                     | N/A    | N/A        | N/A       |
-| legacy_5-classes-CORAL-l_doppler-l_retardo                                | Unknown                     | N/A    | N/A        | N/A       |
 | legacy_5-classes-CORAL-l_ene-l_mono                                       | Unknown                     | N/A    | N/A        | N/A       |
 | legacy_9-class_l_ene-l_mono                                               | Unknown                     | N/A    | N/A        | N/A       |
 | legacy_single_rx                                                          | Unknown                     | N/A    | N/A        | N/A       |
@@ -19,39 +18,31 @@ Este reporte consolida el rendimiento de los modelos y sus respectivas matrices 
 ## 📈 Matrices de Confusión por Experimento
 
 ### PI-DeepONet_Physics_Fourier (Semilla: 42)
-- **Carpeta:** `PI_DeepONet_Physics_Rec_0.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-19_07-44-12`
+- **Carpeta:** `PI_DeepONet_Physics_Rec_0.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-18_14-52-08`
 - **Val Loss:** N/A | **Val Acc:** N/A
 
-![Matriz de Confusión](PI_DeepONet_Physics_Rec_0.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-19_07-44-12/diagnostics/confusion_matrix_all_splits.png)
+![Matriz de Confusión](PI_DeepONet_Physics_Rec_0.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-18_14-52-08/diagnostics/confusion_matrix_all_splits.png)
 
 ---
 
 ### PI-DeepONet_Physics_Fourier (Semilla: 42)
-- **Carpeta:** `PI_DeepONet_Physics_Rec_1.0_CIR_0.01_Dop_0.01_Seed_42_2026-08-19_10-41-50`
+- **Carpeta:** `PI_DeepONet_Physics_Rec_1.0_CIR_0.01_Dop_0.01_Seed_42_2026-08-18_16-37-41`
 - **Val Loss:** N/A | **Val Acc:** N/A
 
-![Matriz de Confusión](PI_DeepONet_Physics_Rec_1.0_CIR_0.01_Dop_0.01_Seed_42_2026-08-19_10-41-50/diagnostics/confusion_matrix_all_splits.png)
+![Matriz de Confusión](PI_DeepONet_Physics_Rec_1.0_CIR_0.01_Dop_0.01_Seed_42_2026-08-18_16-37-41/diagnostics/confusion_matrix_all_splits.png)
 
 ---
 
 ### PI-DeepONet_Physics_Fourier (Semilla: 42)
-- **Carpeta:** `PI_DeepONet_Physics_Rec_1.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-19_09-13-02`
+- **Carpeta:** `PI_DeepONet_Physics_Rec_1.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-18_15-44-51`
 - **Val Loss:** N/A | **Val Acc:** N/A
 
-![Matriz de Confusión](PI_DeepONet_Physics_Rec_1.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-19_09-13-02/diagnostics/confusion_matrix_all_splits.png)
+![Matriz de Confusión](PI_DeepONet_Physics_Rec_1.0_CIR_0.0_Dop_0.0_Seed_42_2026-08-18_15-44-51/diagnostics/confusion_matrix_all_splits.png)
 
 ---
 
 ### Unknown (Semilla: N/A)
 - **Carpeta:** `legacy-l_temp-l_empty`
-- **Val Loss:** N/A | **Val Acc:** N/A
-
-_No disponible_
-
----
-
-### Unknown (Semilla: N/A)
-- **Carpeta:** `legacy_5-classes-CORAL-l_doppler-l_retardo`
 - **Val Loss:** N/A | **Val Acc:** N/A
 
 _No disponible_
