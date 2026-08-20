@@ -1,0 +1,31 @@
+/home/daniell/Desktop/PI-DeepONet/project/src/diagnose_classifier_head_shift.py:124: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
+Modelo cargado desde: /home/daniell/Desktop/PI-DeepONet/project/src/../models/pideeponet_Exp3_physics_informed_completo_seed123_best.pth
+Umbrales coral_bias aprendidos: [ 2.780468    0.53156656 -1.1252185  -2.6115153 ]
+
+--- TRAIN -- escalar proyectado y norma latente por clase real ---
+  Clase   N         projected (media)   projected (std)   latent_norm (media) 
+  0       7190      -5.9283             2.2144            0.5368              
+  1       3304      -0.7380             1.8491            1.6262              
+  2       3314      0.8421              1.3995            2.2387              
+  3       3250      1.5989              1.0154            2.6732              
+  4       2942      1.9062              0.7631            2.9365              
+
+--- TEST  -- escalar proyectado y norma latente por clase real ---
+  Clase   N         projected (media)   projected (std)   latent_norm (media) 
+  0       149051    2.1743              0.3313            4.4975              
+  1       73433     2.1382              0.3726            4.4199              
+  2       71664     2.1385              0.3857            4.3796              
+  3       68639     2.1053              0.4207            4.3698              
+  4       68016     2.1070              0.4398            4.3723              
+
+=== INTERPRETACIÓN ===
+  Correlación (clase real, projected) en TRAIN: 0.816
+  Correlación (clase real, projected) en TEST:  -0.069
+
+  Escalar proyectado medio en TEST: 2.1406
+  Umbrales superados en promedio (de 4): 3
+
+  -> NO hay relación apreciable entre el escalar proyectado y la ocupación
+     real en el dominio de test. La representación (Branch/Trunk) no está
+     generalizando información relevante para el conteo a este dominio nuevo.
